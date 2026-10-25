@@ -55,9 +55,17 @@ def _get_colormap_rgba(palette_name: str, values: np.ndarray) -> Tuple[List[str]
     """Genera lista de colores hexadecimales normalizados a partir de una paleta matplotlib."""
     cmap_str = palette_name.lower() if palette_name else "plasma"
     try:
-        cmap = cm.get_cmap(cmap_str)
+        import matplotlib as mpl
+        if hasattr(mpl, "colormaps"):
+            cmap = mpl.colormaps.get_cmap(cmap_str)
+        else:
+            cmap = cm.get_cmap(cmap_str)
     except Exception:
-        cmap = cm.get_cmap("plasma")
+        import matplotlib as mpl
+        if hasattr(mpl, "colormaps"):
+            cmap = mpl.colormaps.get_cmap("plasma")
+        else:
+            cmap = cm.get_cmap("plasma")
         
     val_clean = np.nan_to_num(values, nan=0.0)
     vmin = float(np.min(val_clean)) if len(val_clean) > 0 else 0.0
