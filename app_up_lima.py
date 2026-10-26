@@ -45,6 +45,7 @@ from src.controller import (
     get_graph_from_coords,
     get_graph_from_place,
     load_cached_lima_district,
+    get_cached_district_pipeline,
     run_pipeline
 )
 
@@ -282,22 +283,31 @@ if btn_process or st.session_state.pipeline_results is None:
                         place_input, network_type_input, node_merge_tolerance=node_merge_tol
                     )
 
-        with st.spinner("📐 Calculando Complejo Simplicial, Operadores Frontera y Laplaciano de Hodge..."):
-            c_type = "alpha" if complex_type_input == "Alpha Complex" else "flag"
-            sc, hodge, centralities = run_pipeline(
-                G_simple,
-                complex_type=c_type,
-                alpha_meters=alpha_param_input
-            )
-            st.session_state.pipeline_results = {
-                "G_simple": G_simple,
-                "sc": sc,
-                "hodge": hodge,
-                "centralities": centralities,
-                "colormap": colormap_input,
-                "basemap": basemap_input
-            }
-            st.toast("✅ Análisis topológico completado con éxito", icon="🎉")
+        c_type = "alpha" if complex_type_input == "Alpha Complex" else "flag"
+        cached_pipe = None
+        if district_selected_key is not None and node_merge_tol == 10.0 and c_type == "alpha" and abs(alpha_param_input - 65.0) < 1e-3:
+            cached_pipe = get_cached_district_pipeline(district_selected_key)
+            
+        if cached_pipe is not None:
+            sc = cached_pipe["sc"]
+            hodge = cached_pipe["hodge"]
+            centralities = cached_pipe["centralities"]
+        else:
+            with st.spinner("📐 Calculando Complejo Simplicial, Operadores Frontera y Laplaciano de Hodge..."):
+                sc, hodge, centralities = run_pipeline(
+                    G_simple,
+                    complex_type=c_type,
+                    alpha_meters=alpha_param_input
+                )
+        st.session_state.pipeline_results = {
+            "G_simple": G_simple,
+            "sc": sc,
+            "hodge": hodge,
+            "centralities": centralities,
+            "colormap": colormap_input,
+            "basemap": basemap_input
+        }
+        st.toast("✅ Análisis topológico cargado con éxito", icon="⚡")
     except Exception as ex:
         st.error(f"❌ Error al procesar la red: {ex}")
         st.stop()
@@ -340,16 +350,33 @@ if st.session_state.pipeline_results is not None:
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab_options = [
         "🗺️ Pestaña 1: Exploración Geográfica",
         "📐 Pestaña 2: Centralidades Simpliciales",
         "🔬 Pestaña 3: Filtración y Rankings",
         "⭐ Pestaña 4: Elementos Críticos (Top Símplices)",
         "📘 Pestaña 5: Guía de Interpretación (UP)"
-    ])
+    ]
+    if hasattr(st, "segmented_control"):
+        active_tab = st.segmented_control(
+            "Pestañas de Trabajo:",
+            options=tab_options,
+            default=tab_options[0],
+            label_visibility="collapsed"
+        )
+    else:
+        active_tab = st.radio(
+            "Pestañas de Trabajo:",
+            options=tab_options,
+            index=0,
+            horizontal=True,
+            label_visibility="collapsed"
+        )
+    if not active_tab:
+        active_tab = tab_options[0]
 
     # PESTAÑA 1: EXPLORACIÓN GEOGRÁFICA
-    with tab1:
+    if active_tab == tab_options[0]:
         c_t1_l, c_t1_r = st.columns([1, 2.8], gap="medium")
         with c_t1_l:
             st.markdown("#### 🔍 Inspección de Nodos Urbanos")
@@ -379,7 +406,7 @@ if st.session_state.pipeline_results is not None:
             st_folium(f_map, use_container_width=True, height=750, returned_objects=["last_object_clicked"])
 
     # PESTAÑA 2: CENTRALIDADES SIMPLICIALES
-    with tab2:
+    elif active_tab == tab_options[1]:
         c_t2_l, c_t2_r = st.columns([1, 2.8], gap="medium")
         with c_t2_l:
             st.markdown("#### ⚙️ Control Multicapa")
@@ -417,7 +444,7 @@ if st.session_state.pipeline_results is not None:
             st_folium(sim_map, use_container_width=True, height=750, returned_objects=["last_object_clicked"])
 
     # PESTAÑA 3: FILTRACIÓN Y RANKINGS
-    with tab3:
+    elif active_tab == tab_options[2]:
         c_t3_l, c_t3_r = st.columns([1, 2.8], gap="medium")
         with c_t3_l:
             st.markdown("#### 🔬 Control de Filtración")
@@ -511,7 +538,7 @@ if st.session_state.pipeline_results is not None:
     # -------------------------------------------------------------------------
     # PESTAÑA 4: ELEMENTOS CRÍTICOS (TOP SÍMPLICES DE MAYOR CENTRALIDAD)
     # -------------------------------------------------------------------------
-    with tab4:
+    elif active_tab == tab_options[3]:
         c_t4_l, c_t4_r = st.columns([1, 2.7], gap="medium")
 
         with c_t4_l:
@@ -635,7 +662,7 @@ if st.session_state.pipeline_results is not None:
                 st_folium(top_map, use_container_width=True, height=880, returned_objects=["last_object_clicked"])
 
     # PESTAÑA 5: GUÍA PEDAGÓGICA
-    with tab5:
+    elif active_tab == tab_options[4]:
         st.markdown("### 📘 Guía de Interpretación de Datos Topológicos Urbanos")
         st.markdown("""
         Esta plataforma complementa la teoría de grafos tradicional al estudiar las **interacciones de orden superior** en la red urbana de tu distrito asignado:
