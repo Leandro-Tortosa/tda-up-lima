@@ -13,7 +13,8 @@ from streamlit_folium import st_folium
 from src.network_ops import (
     fetch_urban_network_by_coords,
     fetch_urban_network_by_place,
-    process_and_project_graph
+    process_and_project_graph,
+    consolidate_close_nodes
 )
 from src.simplicial import (
     SimplicialComplex,
@@ -233,6 +234,17 @@ with st.sidebar:
     ) if complex_type_input == "Alpha Complex" else 0.0
 
     st.markdown("---")
+    st.markdown("### 🔧 Simplificación y Consolidación")
+    node_merge_tol = st.slider(
+        "Consolidación métrica de nodos (metros):",
+        min_value=0.0,
+        max_value=30.0,
+        value=10.0,
+        step=1.0,
+        help="Fusiona en sus centroides geométricos los vértices a menos de esta distancia (10 m por defecto), simplificando la red al unificar los nodos muy próximos y reduciendo la complejidad."
+    )
+
+    st.markdown("---")
     st.markdown("### 🎨 Visualización")
     colormap_input = st.selectbox("Paleta de Color:", ["Plasma", "Viridis", "Inferno", "Magma", "Turbo"], index=0)
     basemap_input = st.selectbox("Mapa Base:", list(BASEMAP_TILES.keys()), index=0)
@@ -247,15 +259,19 @@ if btn_process or st.session_state.pipeline_results is None:
         if district_selected_key is not None:
             with st.spinner("⚡ Cargando distrito de Lima desde el repositorio..."):
                 G_simple, df_nodes, df_edges, meta = load_cached_lima_district(district_selected_key)
+                if node_merge_tol > 10.0:
+                    G_simple = consolidate_close_nodes(G_simple, tolerance_meters=node_merge_tol)
+                    df_nodes = pd.DataFrame.from_dict(dict(G_simple.nodes(data=True)), orient='index')
+                    df_nodes.index.name = 'node_id'
         else:
             with st.spinner("🌐 Descargando red vial desde OpenStreetMap..."):
                 if query_mode.startswith("📍"):
                     G_simple, df_nodes, df_edges = get_graph_from_coords(
-                        lat_input, lon_input, radius_input, network_type_input, node_merge_tolerance=10.0
+                        lat_input, lon_input, radius_input, network_type_input, node_merge_tolerance=node_merge_tol
                     )
                 else:
                     G_simple, df_nodes, df_edges = get_graph_from_place(
-                        place_input, network_type_input, node_merge_tolerance=10.0
+                        place_input, network_type_input, node_merge_tolerance=node_merge_tol
                     )
 
         with st.spinner("📐 Calculando Complejo Simplicial, Operadores Frontera y Laplaciano de Hodge..."):
