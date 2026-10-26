@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 from scipy.sparse.linalg import eigs
+from collections import defaultdict
+import scipy.sparse.csgraph as csgraph
 import networkx as nx
 from src.simplicial import SimplicialComplex
 
@@ -138,16 +140,16 @@ def compute_hodge_operators(sc: SimplicialComplex) -> HodgeOperators:
         L1_up = sp.csr_matrix((0, 0), dtype=np.float64)
         L1 = sp.csr_matrix((0, 0), dtype=np.float64)
         
-    # --- 5. Matrices de Adyacencia Simplicial ---
+    # --- 5. Matrices de Adyacencia Simplicial (Cálculo disperso sin copias densas) ---
     if N1 > 0:
         # A1_down = |L1_down| - diag(|L1_down|)
-        abs_down = sp.csr_matrix(np.abs(L1_down.toarray()))
-        A1_down = abs_down - sp.diags(abs_down.diagonal())
+        A1_down = abs(L1_down).copy()
+        A1_down.setdiag(0)
         A1_down.eliminate_zeros()
         
         # A1_up = |L1_up| - diag(|L1_up|)
-        abs_up = sp.csr_matrix(np.abs(L1_up.toarray()))
-        A1_up = abs_up - sp.diags(abs_up.diagonal())
+        A1_up = abs(L1_up).copy()
+        A1_up.setdiag(0)
         A1_up.eliminate_zeros()
         
         A1_total = A1_down + A1_up
@@ -156,14 +158,15 @@ def compute_hodge_operators(sc: SimplicialComplex) -> HodgeOperators:
         A1_up = sp.csr_matrix((0, 0), dtype=np.float64)
         A1_total = sp.csr_matrix((0, 0), dtype=np.float64)
         
-    # --- 6. Números de Betti (Topología Algebraica) ---
-    # beta_0 = dim(ker(L0)) = N0 - rank(B1)
-    # beta_1 = dim(ker(L1)) = dim(ker(B1)) - rank(B2) = (N1 - rank(B1)) - rank(B2)
+    # --- 6. Números de Betti (Topología Algebraica Exacta vía Euler-Poincaré) ---
+    # beta_0 = dim(ker(L0)) = número de componentes conexas del 1-esqueleto
+    # En 2D sin cavidades tridimensionales (beta_2 = 0):
+    # chi = N0 - N1 + N2 = beta_0 - beta_1  =>  beta_1 = beta_0 - (N0 - N1 + N2)
     if N0 > 0:
-        rank_B1 = int(np.linalg.matrix_rank(B1.toarray())) if N1 > 0 else 0
-        rank_B2 = int(np.linalg.matrix_rank(B2.toarray())) if N2 > 0 else 0
-        betti_0 = max(1, N0 - rank_B1)
-        betti_1 = max(0, (N1 - rank_B1) - rank_B2)
+        n_cc, _ = csgraph.connected_components(L0, directed=False)
+        betti_0 = max(1, int(n_cc))
+        chi = N0 - N1 + N2
+        betti_1 = max(0, int(betti_0 - chi))
     else:
         betti_0 = 0
         betti_1 = 0
@@ -271,10 +274,12 @@ def compute_simplicial_centralities(
     norm_edge_deg = edge_upper_deg / max(1, (N0 - 2)) if N0 > 2 else np.zeros(N1)
     
     # 2-símplices (Triángulos)
-    # Grado dual: número de triángulos que comparten al menos una arista
+    # Grado dual: número de triángulos que comparten al menos una arista (cálculo disperso)
     if N2 > 0:
         A2_down = hodge.B2.T.dot(hodge.B2)
-        tri_adj = sp.csr_matrix(np.abs(A2_down.toarray())) - sp.diags(A2_down.diagonal())
+        tri_adj = abs(A2_down).copy()
+        tri_adj.setdiag(0)
+        tri_adj.eliminate_zeros()
         tri_deg = np.array(tri_adj.sum(axis=1)).flatten()
         norm_tri_deg = tri_deg / 3.0  # Máximo 3 triángulos adyacentes por sus 3 caras
     else:
@@ -301,16 +306,20 @@ def compute_simplicial_centralities(
     else:
         edge_betw_raw = np.zeros(0)
         
-    # Betweenness para 2-símplices (dual graph de triángulos adyacentes por caras compartidas)
+    # Betweenness para 2-símplices (dual graph construido vía índice invertido O(N2))
     if N2 > 0:
         G_tri_dual = nx.Graph()
         G_tri_dual.add_nodes_from(range(N2))
-        for k1 in range(N2):
-            for k2 in range(k1 + 1, N2):
-                t1 = set(sc.s2_triangles[k1])
-                t2 = set(sc.s2_triangles[k2])
-                if len(t1.intersection(t2)) == 2:  # Comparten una arista
-                    G_tri_dual.add_edge(k1, k2)
+        edge_to_tri = defaultdict(list)
+        for k, (u, v, w) in enumerate(sc.s2_triangles):
+            for e in [(u, v), (v, w), (u, w)]:
+                edge_to_tri[e].append(k)
+        for tri_list in edge_to_tri.values():
+            if len(tri_list) > 1:
+                for i in range(len(tri_list)):
+                    for j in range(i + 1, len(tri_list)):
+                        G_tri_dual.add_edge(tri_list[i], tri_list[j])
+                        
         tri_betw_dict = nx.betweenness_centrality(G_tri_dual, normalized=True)
         tri_betw_raw = np.array([tri_betw_dict.get(k, 0.0) for k in range(N2)])
     else:
@@ -332,10 +341,11 @@ def compute_simplicial_centralities(
     eig_s1_up = _compute_leading_eigenvector(hodge.A1_up) if N1 > 0 else np.zeros(0)
     eig_s1_total = _compute_leading_eigenvector(hodge.A1_total) if N1 > 0 else np.zeros(0)
     
-    # 2-símplices: autovector de adyacencia de triángulos
+    # 2-símplices: autovector de adyacencia de triángulos (disperso)
     if N2 > 0:
         A2_down = hodge.B2.T.dot(hodge.B2)
-        A2_adj = sp.csr_matrix(np.abs(A2_down.toarray())) - sp.diags(A2_down.diagonal())
+        A2_adj = abs(A2_down).copy()
+        A2_adj.setdiag(0)
         A2_adj.eliminate_zeros()
         eig_s2 = _compute_leading_eigenvector(A2_adj)
     else:
@@ -343,8 +353,10 @@ def compute_simplicial_centralities(
         
     # 0-símplices: proyección ponderada desde aristas (A1_total) y Laplaciano L0
     if N0 > 0 and N1 > 0:
-        # Autovector de adyacencia de nodos estándar
-        A0 = sp.csr_matrix(np.abs(hodge.L0.toarray())) - sp.diags(hodge.L0.diagonal())
+        # Autovector de adyacencia de nodos estándar (disperso)
+        A0 = abs(hodge.L0).copy()
+        A0.setdiag(0)
+        A0.eliminate_zeros()
         eig_s0_base = _compute_leading_eigenvector(A0)
         # Proyección simplicial agregada de aristas
         eig_s0_from_s1 = np.array(hodge.I1.dot(eig_s1_total)).flatten()

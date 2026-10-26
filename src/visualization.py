@@ -255,17 +255,15 @@ def create_folium_geographic_map(
         
     colors_hex, (vmin, vmax) = _get_colormap_rgba(colormap_name, metric_vals)
     
-    # 1. Dibujar aristas viales
+    # 1. Dibujar aristas viales (Multi-PolyLine consolidada para alta velocidad de renderizado)
     fg_edges = folium.FeatureGroup(name="Red Vial (Aristas)", show=True)
-    for u, v in sc.s1_edges:
-        lat1, lon1 = sc.coords_geographic[u]
-        lat2, lon2 = sc.coords_geographic[v]
-        folium.PolyLine(
-            locations=[[lat1, lon1], [lat2, lon2]],
-            color="#64748b",
-            weight=2.0,
-            opacity=0.7
-        ).add_to(fg_edges)
+    edge_locations = [[sc.coords_geographic[u].tolist(), sc.coords_geographic[v].tolist()] for u, v in sc.s1_edges]
+    folium.PolyLine(
+        locations=edge_locations,
+        color="#64748b",
+        weight=2.0,
+        opacity=0.7
+    ).add_to(fg_edges)
     fg_edges.add_to(m)
     
     # 2. Dibujar nodos con popups interactivos

@@ -69,6 +69,27 @@ def load_cached_lima_district(district_id: str):
     return data["G_simple"], data["df_nodes"], data["df_edges"], data["metadata"]
 
 
+@st.cache_data(show_spinner=False)
+def get_cached_district_pipeline(district_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Carga de forma instantánea el complejo simplicial, operadores de Hodge
+    y centralidades precalculadas para el distrito indicado.
+    """
+    import os
+    import pickle
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    target_file = os.path.join(base_dir, "data", "distritos_lima", f"{district_id}.pickle")
+    if not os.path.exists(target_file):
+        return None
+    with open(target_file, "rb") as f:
+        data = pickle.load(f)
+    return data.get("pipeline_default", None)
+
+
+@st.cache_data(
+    show_spinner=False,
+    hash_funcs={nx.Graph: lambda g: (g.number_of_nodes(), g.number_of_edges(), tuple(sorted(g.nodes())[:10]))}
+)
 def run_pipeline(
     G_simple: nx.Graph,
     complex_type: str = "alpha",
