@@ -133,6 +133,13 @@ st.markdown("""
     .leaflet-container, .stFolium iframe {
         background-color: #ffffff !important;
     }
+    .leaflet-control-layers {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+        font-size: 11px !important;
+        padding: 5px 8px !important;
+        border-radius: 8px !important;
+        max-width: 200px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
