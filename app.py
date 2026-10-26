@@ -454,13 +454,34 @@ if st.session_state.pipeline_results is not None:
             st_folium(f_filt_map, use_container_width=True, height=750, returned_objects=["last_object_clicked"])
 
             st.markdown("#### 🏆 Ranking de Elementos Clave")
-            rt0, rt1 = st.tabs(["Top Calles Más Centrales (k=1)", "Top Nodos Más Centrales (k=0)"])
+            rt0, rt1, rt2 = st.tabs(["Top Calles Más Centrales (k=1)", "Top Nodos Más Centrales (k=0)", "Top Triángulos (k=2)"])
             with rt0:
-                top_edges = df_s1.sort_values(by=col1, ascending=False).head(15)
-                st.dataframe(top_edges[['simplex_id', 'vertices', col1, 'length_m', 'degree_upper', 'betweenness_score']], use_container_width=True)
+                top_edges = df_s1.sort_values(by=col1, ascending=False).head(20).copy()
+                top_edges['ranking'] = range(1, len(top_edges) + 1)
+                cols_edges = list(dict.fromkeys(['ranking', 'simplex_id', 'vertices', col1, 'length_m', 'degree_upper', 'betweenness_score', 'eigenvector_total']))
+                cols_edges = [c for c in cols_edges if c in top_edges.columns]
+                st.dataframe(top_edges[cols_edges], use_container_width=True)
+                csv_e = top_edges[cols_edges].to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Descargar Top Calles (CSV)", data=csv_e, file_name=f"top_calles_{f_code}.csv", mime="text/csv", key="dl_top_calles_t3")
             with rt1:
-                top_nodes = df_s0.sort_values(by=col0, ascending=False).head(15)
-                st.dataframe(top_nodes[['simplex_id', 'osmid', col0, 'degree_k1_edges', 'degree_k2_triangles', 'betweenness_score']], use_container_width=True)
+                top_nodes = df_s0.sort_values(by=col0, ascending=False).head(20).copy()
+                top_nodes['ranking'] = range(1, len(top_nodes) + 1)
+                cols_nodes = list(dict.fromkeys(['ranking', 'simplex_id', 'osmid', col0, 'degree_k1_edges', 'degree_k2_triangles', 'betweenness_score', 'eigenvector_simplicial_proj']))
+                cols_nodes = [c for c in cols_nodes if c in top_nodes.columns]
+                st.dataframe(top_nodes[cols_nodes], use_container_width=True)
+                csv_n = top_nodes[cols_nodes].to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Descargar Top Nodos (CSV)", data=csv_n, file_name=f"top_nodos_{f_code}.csv", mime="text/csv", key="dl_top_nodos_t3")
+            with rt2:
+                if len(df_s2) > 0:
+                    top_tri = df_s2.sort_values(by=col2, ascending=False).head(20).copy()
+                    top_tri['ranking'] = range(1, len(top_tri) + 1)
+                    cols_tri = list(dict.fromkeys(['ranking', 'simplex_id', 'vertices', col2, 'area_m2', 'circumradius', 'degree_adjacent', 'betweenness_score', 'eigenvector_score']))
+                    cols_tri = [c for c in cols_tri if c in top_tri.columns]
+                    st.dataframe(top_tri[cols_tri], use_container_width=True)
+                    csv_t = top_tri[cols_tri].to_csv(index=False).encode('utf-8')
+                    st.download_button("📥 Descargar Top Triángulos (CSV)", data=csv_t, file_name=f"top_triangulos_{f_code}.csv", mime="text/csv", key="dl_top_tri_t3")
+                else:
+                    st.info("No se generaron 2-símplices para la configuración actual.")
 
     # PESTAÑA 4: GUÍA PEDAGÓGICA
     with tab4:
