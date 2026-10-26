@@ -78,6 +78,127 @@ def _get_colormap_rgba(palette_name: str, values: np.ndarray) -> Tuple[List[str]
     return colors, np.array([vmin, vmax])
 
 
+def _generate_colormap_gradient_css(palette_name: str, num_stops: int = 10) -> str:
+    """Genera la cadena CSS linear-gradient(to right, ...) para una paleta matplotlib."""
+    cmap_str = palette_name.lower() if palette_name else "plasma"
+    try:
+        import matplotlib as mpl
+        if hasattr(mpl, "colormaps"):
+            cmap = mpl.colormaps.get_cmap(cmap_str)
+        else:
+            cmap = cm.get_cmap(cmap_str)
+    except Exception:
+        import matplotlib as mpl
+        if hasattr(mpl, "colormaps"):
+            cmap = mpl.colormaps.get_cmap("plasma")
+        else:
+            cmap = cm.get_cmap("plasma")
+            
+    stops = []
+    for i in range(num_stops):
+        frac = i / (num_stops - 1)
+        hex_col = mcolors.to_hex(cmap(frac))
+        stops.append(f"{hex_col} {int(frac * 100)}%")
+    return f"linear-gradient(to right, {', '.join(stops)})"
+
+
+def inject_compact_map_styles(m: folium.Map) -> folium.Map:
+    """Inyecta reglas CSS para hacer el cuadro de capas/mapas más pequeño y compacto."""
+    compact_css = """
+    <style>
+    /* Cuadro de capas y mapas más compacto y pequeño */
+    .leaflet-control-layers {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+        font-size: 11px !important;
+        padding: 5px 8px !important;
+        border-radius: 8px !important;
+        background: rgba(255, 255, 255, 0.92) !important;
+        backdrop-filter: blur(6px) !important;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14) !important;
+        border: 1px solid rgba(0, 0, 0, 0.08) !important;
+        max-width: 200px !important;
+        line-height: 1.25 !important;
+    }
+    .leaflet-control-layers-base, .leaflet-control-layers-overlays {
+        max-height: 200px !important;
+        overflow-y: auto !important;
+    }
+    .leaflet-control-layers-base label, 
+    .leaflet-control-layers-overlays label {
+        margin-bottom: 2px !important;
+        font-size: 10.5px !important;
+        font-weight: 500 !important;
+        color: #1e293b !important;
+        display: flex !important;
+        align-items: center !important;
+        gap: 4px !important;
+        cursor: pointer !important;
+    }
+    .leaflet-control-layers input[type="radio"],
+    .leaflet-control-layers input[type="checkbox"] {
+        margin: 0 3px 0 0 !important;
+        transform: scale(0.8) !important;
+        accent-color: #0284c7 !important;
+        cursor: pointer !important;
+    }
+    .leaflet-control-layers-separator {
+        margin: 3px 0 !important;
+        border-top: 1px solid #e2e8f0 !important;
+    }
+    </style>
+    """
+    m.get_root().header.add_child(folium.Element(compact_css))
+    return m
+
+
+def add_chromatic_scale_legend(
+    m: folium.Map,
+    colormap_name: str = "Plasma",
+    title: str = "Escala de Centralidad",
+    vmin_label: str = "0.0 (Baja)",
+    vmax_label: str = "1.0 (Alta)"
+) -> folium.Map:
+    """Añade una leyenda flotante compacta con la escala cromática al mapa Folium."""
+    gradient_css = _generate_colormap_gradient_css(colormap_name)
+    legend_html = f"""
+    <div id="chromatic-scale-legend" style="
+        position: absolute;
+        bottom: 24px;
+        left: 14px;
+        z-index: 999;
+        background: rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(6px);
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid rgba(0, 0, 0, 0.1);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        color: #0f172a;
+        width: 175px;
+        pointer-events: auto;
+    ">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <span style="font-size: 10px; font-weight: 700; color: #1e293b;">📊 {title}</span>
+            <span style="font-size: 9px; font-weight: 600; color: #64748b; text-transform: uppercase;">{colormap_name}</span>
+        </div>
+        <div style="
+            width: 100%;
+            height: 9px;
+            border-radius: 4px;
+            background: {gradient_css};
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.25);
+            margin-bottom: 3px;
+        "></div>
+        <div style="display: flex; justify-content: space-between; font-size: 9px; font-weight: 600; color: #475569;">
+            <span>{vmin_label}</span>
+            <span>{vmax_label}</span>
+        </div>
+    </div>
+    """
+    m.get_root().html.add_child(folium.Element(legend_html))
+    return m
+
+
 def create_folium_geographic_map(
     sc: SimplicialComplex,
     centralities: SimplicialCentralities,
@@ -180,6 +301,14 @@ def create_folium_geographic_map(
         ).add_to(fg_nodes)
     fg_nodes.add_to(m)
     
+    inject_compact_map_styles(m)
+    add_chromatic_scale_legend(
+        m,
+        colormap_name=colormap_name,
+        title=f"Centralidad: {val_label}",
+        vmin_label=f"{vmin:.2f} (Baja)",
+        vmax_label=f"{vmax:.2f} (Alta)"
+    )
     folium.LayerControl(collapsed=False).add_to(m)
     return m
 
@@ -416,7 +545,16 @@ def create_folium_simplicial_map(
             ).add_to(fg_k0)
     fg_k0.add_to(m)
 
-    # Control de Capas interactivo
+    # Control de Capas interactivo y leyenda cromática
+    inject_compact_map_styles(m)
+    m_label = "Grado" if metric_type == "degree" else ("Betweenness" if metric_type == "betweenness" else "Eigenvector")
+    add_chromatic_scale_legend(
+        m,
+        colormap_name=colormap_name,
+        title=f"Escala: {m_label}",
+        vmin_label="0.0 (Baja)",
+        vmax_label="1.0 (Alta)"
+    )
     folium.LayerControl(collapsed=False).add_to(m)
     return m
 
@@ -1145,5 +1283,267 @@ def create_folium_filtered_simplicial_map(
                 
         fg_highlight.add_to(m)
 
+    inject_compact_map_styles(m)
+    m_label = "Grado" if metric_type == "degree" else ("Betweenness" if metric_type == "betweenness" else "Eigenvector")
+    add_chromatic_scale_legend(
+        m,
+        colormap_name=colormap_name,
+        title=f"Filtración: {m_label}",
+        vmin_label="0.0 (Baja)",
+        vmax_label="1.0 (Alta)"
+    )
+    folium.LayerControl(collapsed=False).add_to(m)
+    return m
+
+
+def create_folium_top_simplices_map(
+    sc: SimplicialComplex,
+    centralities: SimplicialCentralities,
+    hodge: HodgeOperators,
+    metric_type: str = "degree",  # "degree", "betweenness", "eigenvector"
+    show_k0: bool = True,
+    show_k1: bool = True,
+    show_k2: bool = True,
+    top_k0: int = 10,
+    top_k1: int = 10,
+    top_k2: int = 10,
+    basemap_name: str = "Esri Claro (Light Gray Canvas)",
+    colormap_name: str = "Plasma"
+) -> folium.Map:
+    """
+    Construye un mapa exclusivo, limpio e interactivo para visualizar ÚNICAMENTE
+    los símplices (nodos, aristas y triángulos) de mayor centralidad (Top-K).
+    Sin representar el resto de elementos no seleccionados de la red.
+    """
+    if len(sc.s0_nodes) == 0:
+        return folium.Map(location=[38.346254, -0.490899], zoom_start=12)
+        
+    center_lat = float(np.mean(sc.coords_geographic[:, 0]))
+    center_lon = float(np.mean(sc.coords_geographic[:, 1]))
+    
+    # 1. Configurar mapa base principal y capas base seleccionables
+    m = folium.Map(
+        location=[center_lat, center_lon],
+        zoom_start=15,
+        tiles=None,
+        prefer_canvas=True
+    )
+    
+    m.get_root().header.add_child(
+        folium.Element("<style>.leaflet-container { background-color: #ffffff !important; background: #ffffff !important; }</style>")
+    )
+    
+    # Capas base disponibles
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ",
+        name="🗺️ Base: Esri Claro",
+        overlay=False,
+        control=True,
+        show=("Esri Claro" in basemap_name)
+    ).add_to(m)
+    
+    folium.TileLayer(
+        tiles="https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_2r6b_1_91a5b5d056fb6597047e0812",
+        attr='&copy; <a href="https://carto.com/">CARTO</a>',
+        name="🗺️ Base: CartoDB Positron",
+        overlay=False,
+        control=True,
+        show=("CartoDB Positron" in basemap_name)
+    ).add_to(m)
+    
+    folium.TileLayer(
+        tiles="https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png?key=cb1_2r6b_1_91a5b5d056fb6597047e0812",
+        attr='&copy; <a href="https://carto.com/">CARTO</a>',
+        name="🗺️ Base: CartoDB Dark Matter",
+        overlay=False,
+        control=True,
+        show=("Dark" in basemap_name)
+    ).add_to(m)
+    
+    folium.TileLayer(
+        tiles="OpenStreetMap",
+        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+        name="🗺️ Base: OpenStreetMap",
+        overlay=False,
+        control=True,
+        show=("OpenStreetMap" in basemap_name)
+    ).add_to(m)
+    
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri &mdash; Esri Satellite",
+        name="🗺️ Base: Esri Satélite",
+        overlay=False,
+        control=True,
+        show=("Satélite" in basemap_name or "Imagery" in basemap_name)
+    ).add_to(m)
+    
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+        attr="Tiles &copy; Esri Topo",
+        name="🗺️ Base: Esri Topo",
+        overlay=False,
+        control=True,
+        show=("Topo" in basemap_name)
+    ).add_to(m)
+    
+    folium.TileLayer(
+        tiles="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+        attr="Lienzo Blanco Neutro",
+        name="⬜ Base: Lienzo en Blanco",
+        overlay=False,
+        control=True,
+        show=("Lienzo" in basemap_name)
+    ).add_to(m)
+
+    # Identificar métricas
+    if metric_type == "degree":
+        col_s0, col_s1, col_s2 = 'degree_k1_edges', 'degree_upper', 'degree_adjacent'
+        m_name = "Grado Simplicial"
+    elif metric_type == "betweenness":
+        col_s0, col_s1, col_s2 = 'betweenness_score', 'betweenness_score', 'betweenness_score'
+        m_name = "Betweenness Simplicial"
+    else:
+        col_s0, col_s1, col_s2 = 'eigenvector_node', 'eigenvector_total', 'eigenvector_score'
+        m_name = "Eigenvector Simplicial"
+
+    # 2. CAPA TOP TRIÁNGULOS (k=2)
+    df_s2 = centralities.df_centrality_s2
+    if show_k2 and top_k2 > 0 and len(sc.s2_triangles) > 0 and len(df_s2) > 0:
+        actual_k2 = min(top_k2, len(df_s2))
+        top_tri = df_s2.sort_values(by=col_s2, ascending=False).head(actual_k2).copy()
+        top_tri['rank'] = range(1, len(top_tri) + 1)
+        tri_scores = top_tri[col_s2].values
+        tri_colors, _ = _get_colormap_rgba(colormap_name, tri_scores)
+        
+        fg_k2 = folium.FeatureGroup(name=f"🔺 Top {actual_k2} Triángulos (k=2)", show=True, overlay=True)
+        for idx_row, (_, row) in enumerate(top_tri.iterrows()):
+            s_id = int(row['simplex_id'])
+            u, v, w = sc.s2_triangles[s_id]
+            lat_u, lon_u = sc.coords_geographic[u]
+            lat_v, lon_v = sc.coords_geographic[v]
+            lat_w, lon_w = sc.coords_geographic[w]
+            color_t = tri_colors[idx_row]
+            score_t = float(row[col_s2])
+            rank_t = int(row['rank'])
+            area_m2 = float(row.get('area_m2', 0.0))
+            circ_m = float(row.get('circumradius', 0.0))
+            
+            popup_html = f"""
+            <div style="font-family: 'Inter', sans-serif; font-size: 13px; width: 240px; line-height: 1.4;">
+                <b style="color: #4338ca; font-size: 14px;">🔺 Triángulo Top #{rank_t} (k=2)</b>
+                <hr style="margin: 4px 0; border: 0.5px solid #cbd5e1;"/>
+                <b>ID Símplex:</b> #{s_id}<br/>
+                <b>Vértices OSM:</b> [{sc.idx_to_node[u]}, {sc.idx_to_node[v]}, {sc.idx_to_node[w]}]<br/>
+                <b style="color: #6366f1;">{m_name}:</b> {score_t:.5f}<br/>
+                <b>Área:</b> {area_m2:.1f} m² | <b>Circunradio:</b> {circ_m:.1f} m
+            </div>
+            """
+            folium.Polygon(
+                locations=[[lat_u, lon_u], [lat_v, lon_v], [lat_w, lon_w]],
+                color=color_t,
+                weight=3.0,
+                fill=True,
+                fill_color=color_t,
+                fill_opacity=0.65,
+                popup=folium.Popup(popup_html, max_width=260),
+                tooltip=f"🔺 Triángulo Top #{rank_t} | {m_name}: {score_t:.4f}"
+            ).add_to(fg_k2)
+        fg_k2.add_to(m)
+
+    # 3. CAPA TOP CALLES / ARISTAS (k=1)
+    df_s1 = centralities.df_centrality_s1
+    if show_k1 and top_k1 > 0 and len(sc.s1_edges) > 0 and len(df_s1) > 0:
+        actual_k1 = min(top_k1, len(df_s1))
+        top_edges = df_s1.sort_values(by=col_s1, ascending=False).head(actual_k1).copy()
+        top_edges['rank'] = range(1, len(top_edges) + 1)
+        edge_scores = top_edges[col_s1].values
+        edge_colors, _ = _get_colormap_rgba(colormap_name, edge_scores)
+        
+        fg_k1 = folium.FeatureGroup(name=f"🛣️ Top {actual_k1} Calles (k=1)", show=True, overlay=True)
+        for idx_row, (_, row) in enumerate(top_edges.iterrows()):
+            s_id = int(row['simplex_id'])
+            u, v = sc.s1_edges[s_id]
+            lat1, lon1 = sc.coords_geographic[u]
+            lat2, lon2 = sc.coords_geographic[v]
+            color_e = edge_colors[idx_row]
+            score_e = float(row[col_s1])
+            rank_e = int(row['rank'])
+            length_m = float(row.get('length_m', 0.0))
+            hwy = str(row.get('highway', 'road'))
+            
+            popup_html = f"""
+            <div style="font-family: 'Inter', sans-serif; font-size: 13px; width: 240px; line-height: 1.4;">
+                <b style="color: #059669; font-size: 14px;">🛣️ Calle Top #{rank_e} (k=1)</b>
+                <hr style="margin: 4px 0; border: 0.5px solid #cbd5e1;"/>
+                <b>ID Símplex:</b> #{s_id}<br/>
+                <b>Vértices OSM:</b> [{sc.idx_to_node[u]}, {sc.idx_to_node[v]}]<br/>
+                <b style="color: #059669;">{m_name}:</b> {score_e:.5f}<br/>
+                <b>Longitud:</b> {length_m:.1f} m | <b>Tipo:</b> {hwy}
+            </div>
+            """
+            folium.PolyLine(
+                locations=[[lat1, lon1], [lat2, lon2]],
+                color=color_e,
+                weight=6.0,
+                opacity=0.95,
+                popup=folium.Popup(popup_html, max_width=260),
+                tooltip=f"🛣️ Calle Top #{rank_e} | {m_name}: {score_e:.4f}"
+            ).add_to(fg_k1)
+        fg_k1.add_to(m)
+
+    # 4. CAPA TOP NODOS (k=0)
+    df_s0 = centralities.df_centrality_s0
+    if show_k0 and top_k0 > 0 and len(sc.s0_nodes) > 0 and len(df_s0) > 0:
+        actual_k0 = min(top_k0, len(df_s0))
+        top_nodes = df_s0.sort_values(by=col_s0, ascending=False).head(actual_k0).copy()
+        top_nodes['rank'] = range(1, len(top_nodes) + 1)
+        node_scores = top_nodes[col_s0].values
+        node_colors, _ = _get_colormap_rgba(colormap_name, node_scores)
+        
+        fg_k0 = folium.FeatureGroup(name=f"⭐ Top {actual_k0} Nodos (k=0)", show=True, overlay=True)
+        for idx_row, (_, row) in enumerate(top_nodes.iterrows()):
+            s_id = int(row['simplex_id'])
+            lat, lon = float(row['lat']), float(row['lon'])
+            osmid = row['osmid']
+            color_n = node_colors[idx_row]
+            score_n = float(row[col_s0])
+            rank_n = int(row['rank'])
+            deg_k1 = int(row.get('degree_k1_edges', 0))
+            deg_k2 = int(row.get('degree_k2_triangles', 0))
+            
+            popup_html = f"""
+            <div style="font-family: 'Inter', sans-serif; font-size: 13px; width: 230px; line-height: 1.4;">
+                <b style="color: #e11d48; font-size: 14px;">⭐ Nodo Top #{rank_n} (k=0)</b>
+                <hr style="margin: 4px 0; border: 0.5px solid #cbd5e1;"/>
+                <b>OSM ID:</b> #{osmid} (Símplex #{s_id})<br/>
+                <b>Coordenadas:</b> ({lat:.5f}, {lon:.5f})<br/>
+                <b style="color: #e11d48;">{m_name}:</b> {score_n:.5f}<br/>
+                <b>Grado k=1 (Calles):</b> {deg_k1}<br/>
+                <b>Grado k=2 (Triángulos):</b> {deg_k2}
+            </div>
+            """
+            folium.CircleMarker(
+                location=[lat, lon],
+                radius=8.5,
+                color="#ffffff",
+                fill=True,
+                fill_color=color_n,
+                fill_opacity=1.0,
+                weight=2.5,
+                popup=folium.Popup(popup_html, max_width=250),
+                tooltip=f"⭐ Nodo Top #{rank_n} | {m_name}: {score_n:.4f}"
+            ).add_to(fg_k0)
+        fg_k0.add_to(m)
+
+    inject_compact_map_styles(m)
+    add_chromatic_scale_legend(
+        m,
+        colormap_name=colormap_name,
+        title=f"Top Símplices ({m_name})",
+        vmin_label="Menor Top",
+        vmax_label="Mayor Top"
+    )
     folium.LayerControl(collapsed=False).add_to(m)
     return m
