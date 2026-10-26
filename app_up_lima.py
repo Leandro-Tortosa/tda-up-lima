@@ -13,7 +13,8 @@ from streamlit_folium import st_folium
 from src.network_ops import (
     fetch_urban_network_by_coords,
     fetch_urban_network_by_place,
-    process_and_project_graph
+    process_and_project_graph,
+    consolidate_close_nodes
 )
 from src.simplicial import (
     SimplicialComplex,
@@ -30,6 +31,7 @@ from src.visualization import (
     create_folium_geographic_map,
     create_folium_simplicial_map,
     create_folium_filtered_simplicial_map,
+    create_folium_top_simplices_map,
     create_filtration_histogram_figure,
     BASEMAP_TILES
 )
@@ -132,6 +134,13 @@ st.markdown("""
     .leaflet-container, .stFolium iframe {
         background-color: #ffffff !important;
     }
+    .leaflet-control-layers {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
+        font-size: 11px !important;
+        padding: 5px 8px !important;
+        border-radius: 8px !important;
+        max-width: 200px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -233,6 +242,17 @@ with st.sidebar:
     ) if complex_type_input == "Alpha Complex" else 0.0
 
     st.markdown("---")
+    st.markdown("### 🔧 Simplificación y Consolidación")
+    node_merge_tol = st.slider(
+        "Consolidación métrica de nodos (metros):",
+        min_value=0.0,
+        max_value=30.0,
+        value=10.0,
+        step=1.0,
+        help="Fusiona en sus centroides geométricos los vértices a menos de esta distancia (10 m por defecto), simplificando la red al unificar los nodos muy próximos y reduciendo la complejidad."
+    )
+
+    st.markdown("---")
     st.markdown("### 🎨 Visualización")
     colormap_input = st.selectbox("Paleta de Color:", ["Plasma", "Viridis", "Inferno", "Magma", "Turbo"], index=0)
     basemap_input = st.selectbox("Mapa Base:", list(BASEMAP_TILES.keys()), index=0)
@@ -247,15 +267,19 @@ if btn_process or st.session_state.pipeline_results is None:
         if district_selected_key is not None:
             with st.spinner("⚡ Cargando distrito de Lima desde el repositorio..."):
                 G_simple, df_nodes, df_edges, meta = load_cached_lima_district(district_selected_key)
+                if node_merge_tol > 10.0:
+                    G_simple = consolidate_close_nodes(G_simple, tolerance_meters=node_merge_tol)
+                    df_nodes = pd.DataFrame.from_dict(dict(G_simple.nodes(data=True)), orient='index')
+                    df_nodes.index.name = 'node_id'
         else:
             with st.spinner("🌐 Descargando red vial desde OpenStreetMap..."):
                 if query_mode.startswith("📍"):
                     G_simple, df_nodes, df_edges = get_graph_from_coords(
-                        lat_input, lon_input, radius_input, network_type_input, node_merge_tolerance=10.0
+                        lat_input, lon_input, radius_input, network_type_input, node_merge_tolerance=node_merge_tol
                     )
                 else:
                     G_simple, df_nodes, df_edges = get_graph_from_place(
-                        place_input, network_type_input, node_merge_tolerance=10.0
+                        place_input, network_type_input, node_merge_tolerance=node_merge_tol
                     )
 
         with st.spinner("📐 Calculando Complejo Simplicial, Operadores Frontera y Laplaciano de Hodge..."):
@@ -316,11 +340,12 @@ if st.session_state.pipeline_results is not None:
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🗺️ Pestaña 1: Exploración Geográfica",
         "📐 Pestaña 2: Centralidades Simpliciales",
         "🔬 Pestaña 3: Filtración y Rankings",
-        "📘 Pestaña 4: Guía de Interpretación (UP)"
+        "⭐ Pestaña 4: Elementos Críticos (Top Símplices)",
+        "📘 Pestaña 5: Guía de Interpretación (UP)"
     ])
 
     # PESTAÑA 1: EXPLORACIÓN GEOGRÁFICA
@@ -483,8 +508,134 @@ if st.session_state.pipeline_results is not None:
                 else:
                     st.info("No se generaron 2-símplices para la configuración actual.")
 
-    # PESTAÑA 4: GUÍA PEDAGÓGICA
+    # -------------------------------------------------------------------------
+    # PESTAÑA 4: ELEMENTOS CRÍTICOS (TOP SÍMPLICES DE MAYOR CENTRALIDAD)
+    # -------------------------------------------------------------------------
     with tab4:
+        c_t4_l, c_t4_r = st.columns([1, 2.7], gap="medium")
+
+        with c_t4_l:
+            st.markdown("#### ⚙️ Parámetros de Selección Top")
+            
+            # 1. Métrica de filtrado
+            t4_metric_label = st.selectbox(
+                "Métrica de Centralidad:",
+                ["Simplicial Degree", "Simplicial Betweenness", "Simplicial Eigenvector"],
+                index=0,
+                key="t4_up_metric_select"
+            )
+            t4_metric_code = "degree" if "Degree" in t4_metric_label else ("betweenness" if "Betweenness" in t4_metric_label else "eigenvector")
+
+            st.markdown("---")
+            # 2. Tipos de símplices que queremos visualizar (0, 1 o 2 a la vez)
+            st.markdown("##### 📐 Tipo de Símplices a Visualizar")
+            st.caption("Seleccione qué dimensiones representar conjuntamente (NO se representan todos):")
+            t4_show_k0 = st.checkbox("0-Símplices (Nodos / Cruces)", value=True, key="t4_up_chk_k0")
+            t4_show_k1 = st.checkbox("1-Símplices (Aristas / Calles)", value=True, key="t4_up_chk_k1")
+            t4_show_k2 = st.checkbox("2-Símplices (Triángulos / Manzanas)", value=True, key="t4_up_chk_k2")
+
+            st.markdown("---")
+            # 3. Número de elementos Top con mayor centralidad
+            st.markdown("##### 🔢 Cantidad de Elementos Top-K")
+            
+            top_k0_val = 0
+            if t4_show_k0:
+                top_k0_val = st.number_input(
+                    "Top Nodos (k=0):",
+                    min_value=1,
+                    max_value=max(1, len(sc.s0_nodes)),
+                    value=min(10, max(1, len(sc.s0_nodes))),
+                    step=1,
+                    help="Cantidad de nodos con mayor centralidad a representar.",
+                    key="t4_up_num_k0"
+                )
+
+            top_k1_val = 0
+            if t4_show_k1:
+                top_k1_val = st.number_input(
+                    "Top Calles (k=1):",
+                    min_value=1,
+                    max_value=max(1, len(sc.s1_edges)),
+                    value=min(10, max(1, len(sc.s1_edges))),
+                    step=1,
+                    help="Cantidad de aristas/calles con mayor centralidad a representar.",
+                    key="t4_up_num_k1"
+                )
+
+            top_k2_val = 0
+            if t4_show_k2:
+                max_tri = len(sc.s2_triangles)
+                if max_tri > 0:
+                    top_k2_val = st.number_input(
+                        "Top Triángulos (k=2):",
+                        min_value=1,
+                        max_value=max(1, max_tri),
+                        value=min(10, max(1, max_tri)),
+                        step=1,
+                        help="Cantidad de 2-símplices con mayor centralidad a representar.",
+                        key="t4_up_num_k2"
+                    )
+                else:
+                    st.info("No hay 2-símplices generados en este complejo.")
+
+            st.markdown("---")
+            # 4. Selección del tipo de mapa entre varios, así como un lienzo en blanco
+            st.markdown("##### 🗺️ Mapa Base")
+            t4_basemap = st.selectbox(
+                "Seleccionar Fondo:",
+                [
+                    "Esri Claro (Light Gray Canvas)",
+                    "Lienzo en Blanco (Sin teselas base)",
+                    "CartoDB Positron (Fondo claro)",
+                    "CartoDB Dark Matter (Fondo oscuro)",
+                    "OpenStreetMap Estándar",
+                    "Esri World Imagery (Satélite)",
+                    "Esri World Topo Map (Topográfico)"
+                ],
+                index=0,
+                key="t4_up_basemap_select"
+            )
+
+            # Resumen de elementos activos
+            total_top_elems = (top_k0_val if t4_show_k0 else 0) + (top_k1_val if t4_show_k1 else 0) + (top_k2_val if t4_show_k2 else 0)
+            st.markdown(f"""
+            <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; margin-top: 10px;">
+                <b style="color: #0f172a; font-size: 12px;">📊 RESUMEN DE ELEMENTOS</b><br/>
+                <span style="font-size: 11.5px; color: #475569;">
+                    • Nodos: <b>{top_k0_val if t4_show_k0 else 0}</b><br/>
+                    • Calles: <b>{top_k1_val if t4_show_k1 else 0}</b><br/>
+                    • Triángulos: <b>{top_k2_val if t4_show_k2 else 0}</b><br/>
+                    • Total en mapa: <b>{total_top_elems}</b>
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with c_t4_r:
+            st.markdown("#### 🌟 Mapa Interactivo: Núcleo Crítico Urbano (Top-K)")
+            st.caption(f"Visualización limpia y exclusiva de los elementos de mayor centralidad ({t4_metric_label}). Formato amplio 3:4.")
+            
+            if not t4_show_k0 and not t4_show_k1 and not t4_show_k2:
+                st.warning("⚠️ Seleccione al menos un tipo de símplex (0, 1 o 2) en el panel izquierdo para visualizar en el mapa.")
+            else:
+                top_map = create_folium_top_simplices_map(
+                    sc=sc,
+                    centralities=centralities,
+                    hodge=hodge,
+                    metric_type=t4_metric_code,
+                    show_k0=t4_show_k0,
+                    show_k1=t4_show_k1,
+                    show_k2=t4_show_k2,
+                    top_k0=top_k0_val,
+                    top_k1=top_k1_val,
+                    top_k2=top_k2_val,
+                    basemap_name=t4_basemap,
+                    colormap_name=colormap_input
+                )
+                # Formato grande en proporción vertical 3:4 (altura 880px)
+                st_folium(top_map, use_container_width=True, height=880, returned_objects=["last_object_clicked"])
+
+    # PESTAÑA 5: GUÍA PEDAGÓGICA
+    with tab5:
         st.markdown("### 📘 Guía de Interpretación de Datos Topológicos Urbanos")
         st.markdown("""
         Esta plataforma complementa la teoría de grafos tradicional al estudiar las **interacciones de orden superior** en la red urbana de tu distrito asignado:
